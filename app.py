@@ -10,12 +10,87 @@ import time
 import base64
 import logging
 import os
+import json
+import time
+from dotenv import load_dotenv
+import threading
+import socket
+import subprocess
+import sys
 
 
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# SINGLE API URL CONFIGURATION - REMOVE ALL OTHER API_URL DEFINITIONS
+API_URL = os.getenv("API_URL", "http://localhost:8001")
+
+# Backend startup code
+def is_backend_running():
+    """Check if backend is running on port 8001"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    result = sock.connect_ex(('localhost', 8001))
+    sock.close()
+    return result == 0
+
+# Initialize backend startup in session state
+if 'backend_started' not in st.session_state:
+    st.session_state.backend_started = is_backend_running()
+
+if not st.session_state.backend_started:
+    # Show startup message
+    startup_container = st.empty()
+    with startup_container.container():
+        st.info("🚀 Initializing TasteTarget AI services...")
+        
+    # Start backend in background
+    def run_backend():
+        try:
+            # Run the backend silently
+            subprocess.run([
+                sys.executable, "-m", "uvicorn", 
+                "main:app", 
+                "--host", "0.0.0.0", 
+                "--port", "8001",
+                "--log-level", "error"  # Reduce log verbosity
+            ], capture_output=True)
+        except Exception as e:
+            logger.error(f"Backend startup error: {e}")
+    
+    backend_thread = threading.Thread(target=run_backend, daemon=True)
+    backend_thread.start()
+    
+    # Wait for backend with progress bar
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i in range(30):
+        if is_backend_running():
+            st.session_state.backend_started = True
+            progress_bar.progress(100)
+            status_text.success("✅ AI services ready!")
+            time.sleep(1)
+            startup_container.empty()
+            progress_bar.empty()
+            status_text.empty()
+            break
+        progress_bar.progress((i + 1) * 3)
+        status_text.text(f"Starting services... {i+1}/30")
+        time.sleep(1)
+    else:
+        startup_container.warning("⚠️ Backend services are taking longer than expected. Some features may be limited.")
+        progress_bar.empty()
+        status_text.empty()
+        
+        
+
+# Log the API URL being used
+logger.info(f"Using API URL: {API_URL}")
+logger.info(f"Backend running: {st.session_state.backend_started}")
 
 API_URL = os.getenv("API_URL", "http://tatsetarget-asfbcudwbrhvbmah.canadacentral-01.azurewebsites.net/")
 
