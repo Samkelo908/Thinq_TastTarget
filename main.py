@@ -1086,8 +1086,9 @@ async def generate_cultural_visual(request: dict):
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting TasteTarget API with Qloo + OpenAI...")
+    port = int(os.environ.get("BACKEND_PORT", 8001))  
+    logger.info(f"Starting TasteTarget API on port {port}...")
     logger.info(f"Qloo API: {'Connected' if QLOO_API_KEY else 'Not configured'}")
     logger.info(f"OpenAI API: {'Connected' if OPENAI_API_KEY else 'Not configured'}")
     logger.info("Visual Generation: Available via Hugging Face Space")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)

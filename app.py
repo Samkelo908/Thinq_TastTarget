@@ -580,7 +580,9 @@ if 'loading' not in st.session_state:
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 'dashboard'
 
-API_URL = os.getenv("API_URL", "https://tastetarget-api.azurewebsites.net")
+# Backend API URL
+# Change this line in your app.py
+API_URL = os.getenv("API_URL", "http://localhost:8001")  
 
 # Header
 st.markdown("""
