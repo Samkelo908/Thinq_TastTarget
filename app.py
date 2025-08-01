@@ -22,11 +22,24 @@ import sys
 
 load_dotenv()
 
+# Configure Streamlit FIRST - This must be the first Streamlit command
+st.set_page_config(
+    page_title="TasteTarget - AI Marketing Intelligence",
+    page_icon="⚫",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://tastetarget.ai/help',
+        'Report a bug': 'https://tastetarget.ai/support',
+        'About': 'TasteTarget - AI-Powered Audience Intelligence Platform'
+    }
+)
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# SINGLE API URL CONFIGURATION - REMOVE ALL OTHER API_URL DEFINITIONS
+# SINGLE API URL CONFIGURATION
 API_URL = os.getenv("API_URL", "http://localhost:8001")
 
 # Backend startup code
@@ -85,12 +98,11 @@ if not st.session_state.backend_started:
         startup_container.warning("⚠️ Backend services are taking longer than expected. Some features may be limited.")
         progress_bar.empty()
         status_text.empty()
-        
-        
 
 # Log the API URL being used
 logger.info(f"Using API URL: {API_URL}")
 logger.info(f"Backend running: {st.session_state.backend_started}")
+
 
 API_URL = os.getenv("API_URL", "http://tatsetarget-asfbcudwbrhvbmah.canadacentral-01.azurewebsites.net/")
 
