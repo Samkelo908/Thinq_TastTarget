@@ -9,10 +9,17 @@ from typing import Dict, List
 import time
 import base64
 import logging
+import os
+
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+API_URL = os.getenv("API_URL", "http://tatsetarget-asfbcudwbrhvbmah.canadacentral-01.azurewebsites.net/")
+
+API_URL = os.getenv("API_URL", "https://tastetarget-api.azurewebsites.net")
 
 # Configure Streamlit
 st.set_page_config(
@@ -573,8 +580,7 @@ if 'loading' not in st.session_state:
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 'dashboard'
 
-# Backend API URL
-API_URL = st.secrets.get("API_URL", "http://localhost:8000")
+API_URL = os.getenv("API_URL", "https://tastetarget-api.azurewebsites.net")
 
 # Header
 st.markdown("""
