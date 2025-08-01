@@ -8,7 +8,7 @@ requests==2.31.0
 httpx==0.25.2
 
 # Data Processing & Visualization
-pandas==2.1.4
+pandas==2.2.2
 plotly==5.18.0
 
 # Data Validation
