@@ -93,7 +93,7 @@ class TasteTargetResponse(BaseModel):
     generation_timestamp: str
     suggestions: Dict[str, List[str]]
     data_source: str = Field(default="Qloo Taste AI + OpenAI GPT-4")
-    visual_generation_endpoint: str = Field(default="https://huggingface.co/spaces/Samkelo28/taste-target-visual-generator")
+    visual_generation_endpoint: str = Field(default="https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell")
 
 class HealthResponse(BaseModel):
     status: str
