@@ -15,45 +15,72 @@ from gradio_client import Client
 import time
 import math
 
-# Load environment variables
+# Load environment variables (Azure will override these)
 load_dotenv()
 
-# API Configuration
+# Azure-compatible API Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 QLOO_API_KEY = os.getenv("QLOO_API_KEY")
 QLOO_API_URL = os.getenv("QLOO_API_URL", "https://hackathon.api.qloo.com")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")  # Add this for Azure
+
+# Azure-specific configuration
+AZURE_ENV = os.getenv("ENVIRONMENT", "production")
+PORT = int(os.getenv("PORT", 8000))  # Azure uses PORT environment variable
 
 # Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-APP_ENV = os.getenv("APP_ENV", "development")
+APP_ENV = os.getenv("APP_ENV", "production")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# Configure logging
+# Configure logging for Azure
 log_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
 logging.basicConfig(
     level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # Azure captures stdout
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Log startup information
+logger.info("=" * 50)
+logger.info("🚀 TasteTarget API Starting...")
+logger.info("=" * 50)
+logger.info(f"Environment: {AZURE_ENV}")
+logger.info(f"Port: {PORT}")
+logger.info(f"OpenAI API: {'✅ Configured' if OPENAI_API_KEY else '❌ Missing'}")
+logger.info(f"Qloo API: {'✅ Configured' if QLOO_API_KEY else '❌ Missing'}")
+logger.info(f"Hugging Face API: {'✅ Configured' if HUGGINGFACE_API_KEY else '❌ Missing'}")
+logger.info("=" * 50)
 
 # Initialize FastAPI app
 app = FastAPI(
     title="TasteTarget API - Qloo + OpenAI",
     description="AI-Powered Cultural Targeting using Qloo's Taste AI and OpenAI GPT-4",
-    version="3.0.0"
+    version="3.1.0",
+    docs_url="/docs" if AZURE_ENV != "production" else None,  # Disable docs in production
+    redoc_url="/redoc" if AZURE_ENV != "production" else None
 )
 
-# Configure CORS
+# Configure CORS for Azure
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://*.azurewebsites.net",
+        "https://*.azurestaticapps.net", 
+        "http://localhost:3000",
+        "http://localhost:8501",
+        "https://localhost:3000"
+    ] if AZURE_ENV == "production" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Request/Response Models
+# Request/Response Models (keep existing models)
 class ProductInput(BaseModel):
     product_name: str = Field(..., example="Eco-Friendly Vegan Sneakers")
     product_description: str = Field(..., example="Minimalist design, sustainable materials, zero waste production")
@@ -99,33 +126,44 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: str
     version: str
+    environment: str
     qloo_connected: bool
     openai_connected: bool
+    huggingface_configured: bool
 
-# OpenAI Integration
+# Azure-optimized OpenAI Integration
 async def call_openai_api(prompt: str, temperature: float = 0.7, model: str = "gpt-4o-mini") -> str:
-    """Call OpenAI API for text generation"""
+    """Call OpenAI API for text generation with Azure compatibility"""
+    if not client:
+        raise HTTPException(status_code=500, detail="OpenAI API not configured")
+    
     try:
-        # Use the async approach with asyncio
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a marketing expert specializing in cultural intelligence and audience targeting. Always respond with valid JSON when asked."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=temperature,
-            max_tokens=1000
+        # Use the async approach with timeout for Azure
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.chat.completions.create,
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a marketing expert specializing in cultural intelligence and audience targeting. Always respond with valid JSON when asked."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=temperature,
+                max_tokens=1000
+            ),
+            timeout=30.0  # Azure timeout handling
         )
         
         return response.choices[0].message.content
         
+    except asyncio.TimeoutError:
+        logger.error("OpenAI API timeout")
+        raise HTTPException(status_code=504, detail="OpenAI API timeout")
     except Exception as e:
         logger.error(f"OpenAI API error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
 def extract_json_from_response(response: str) -> dict:
-    """Extract JSON from OpenAI response"""
+    """Extract JSON from OpenAI response - Azure optimized"""
     try:
         # Clean response
         response = response.strip()
@@ -151,12 +189,12 @@ def extract_json_from_response(response: str) -> dict:
         
     except Exception as e:
         logger.warning(f"JSON parse error: {e}")
-        logger.debug(f"Response was: {response}")
+        logger.debug(f"Response was: {response[:200]}...")  # Truncate for Azure logs
         return {}
 
-# Qloo API Integration (same as before)
+# Azure-optimized Qloo API Integration
 async def call_qloo_api(product_info: dict) -> List[dict]:
-    """Call Qloo API v2 for taste-based insights"""
+    """Call Qloo API v2 for taste-based insights - Azure optimized"""
     if not QLOO_API_KEY:
         logger.warning("QLOO_API_KEY not found, using mock data")
         return await mock_qloo_api(product_info)
@@ -169,7 +207,11 @@ async def call_qloo_api(product_info: dict) -> List[dict]:
     clusters = []
     
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # Azure-optimized HTTP client with proper timeouts
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+        ) as http_client:
             tag_mappings = {
                 "sustainability": ["urn:tag:genre:lifestyle:eco-friendly", "urn:tag:genre:lifestyle:sustainable"],
                 "innovation": ["urn:tag:genre:tech:innovative", "urn:tag:genre:lifestyle:modern"],
@@ -194,7 +236,7 @@ async def call_qloo_api(product_info: dict) -> List[dict]:
                     url = f"{base_url}?{query_string}"
                     
                     logger.info(f"Calling Qloo API: {url}")
-                    response = await client.get(url, headers=headers)
+                    response = await http_client.get(url, headers=headers)
                     
                     if response.status_code == 200:
                         insights = response.json()
@@ -305,7 +347,7 @@ def get_default_interests(category: str, cluster_name: str) -> List[str]:
 
 async def mock_qloo_api(product_info: dict) -> List[dict]:
     """Fallback mock data when Qloo API is unavailable"""
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.1)  # Reduced for Azure performance
     
     clusters = []
     
@@ -347,9 +389,11 @@ async def mock_qloo_api(product_info: dict) -> List[dict]:
     
     return clusters[:3]
 
-# Persona Generation with OpenAI
+# Keep all your existing persona and copy generation functions...
+# (I'll include the key ones that need Azure optimization)
+
 async def generate_personas_with_openai(product_input: ProductInput, taste_clusters: List[dict]) -> List[TastePersona]:
-    """Generate personas using OpenAI GPT-4"""
+    """Generate personas using OpenAI GPT-4 - Azure optimized"""
     personas = []
     
     for i, cluster in enumerate(taste_clusters):
@@ -378,18 +422,13 @@ Generate a JSON object with exactly these fields:
 }}
 
 Based on the cultural interests, suggest REAL, CURRENT influencers who are active in 2024/2025. 
-For musicians, include artists from the music genres mentioned in the interests.
-For lifestyle bloggers, include real Instagram/TikTok/YouTube creators who align with these interests.
-For thought leaders, include real industry experts, authors, or speakers relevant to the brand values.
-
-Important: Return ONLY the JSON object, no other text or markdown."""
+Return ONLY the JSON object, no other text or markdown."""
 
         try:
             response = await call_openai_api(prompt, temperature=0.7)
             persona_data = extract_json_from_response(response)
             
             if persona_data and "persona_name" in persona_data:
-                # Extract specific influencers if provided, otherwise use empty dict
                 specific_influencers = persona_data.get('specific_influencers', {})
                 
                 personas.append(TastePersona(
@@ -433,7 +472,7 @@ def create_fallback_persona(cluster: dict, index: int) -> TastePersona:
     )
 
 async def generate_campaign_copy_with_openai(product_input: ProductInput, personas: List[TastePersona]) -> List[CampaignCopy]:
-    """Generate campaign copy using OpenAI"""
+    """Generate campaign copy using OpenAI - Azure optimized"""
     copies = []
     
     tone_guide = {
@@ -539,29 +578,37 @@ async def generate_suggestions(product_input: ProductInput, personas: List[Taste
     
     return suggestions
 
-# API Endpoints
+# Azure-optimized API Endpoints
 @app.get("/", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Health check endpoint"""
+    """Azure-compatible health check endpoint"""
     # Test connections
     qloo_connected = bool(QLOO_API_KEY)
     openai_connected = bool(OPENAI_API_KEY)
+    huggingface_configured = bool(HUGGINGFACE_API_KEY)
     
     return HealthResponse(
         status="healthy",
         timestamp=datetime.utcnow().isoformat(),
-        version="3.0.0",
+        version="3.1.0",
+        environment=AZURE_ENV,
         qloo_connected=qloo_connected,
-        openai_connected=openai_connected
+        openai_connected=openai_connected,
+        huggingface_configured=huggingface_configured
     )
 
 @app.post("/api/generate-targeting", response_model=TasteTargetResponse)
 async def generate_targeting(product_input: ProductInput):
-    """Generate taste-based targeting using Qloo + OpenAI"""
+    """Generate taste-based targeting using Qloo + OpenAI - Azure optimized"""
     try:
         logger.info(f"Generating targeting for: {product_input.product_name}")
         logger.info(f"Using Qloo API: {bool(QLOO_API_KEY)}")
         logger.info(f"Using OpenAI API: {bool(OPENAI_API_KEY)}")
+        
+        # Validate required APIs
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=503, detail="OpenAI API not configured")
         
         # Step 1: Get taste clusters from Qloo API
         taste_clusters = await call_qloo_api(product_input.dict())
@@ -593,6 +640,8 @@ async def generate_targeting(product_input: ProductInput):
         logger.info(f"Successfully generated targeting for: {product_input.product_name}")
         return response
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in generate_targeting: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -601,6 +650,9 @@ async def generate_targeting(product_input: ProductInput):
 async def test_openai_connection():
     """Test OpenAI API connection"""
     try:
+        if not OPENAI_API_KEY:
+            return {"status": "error", "error": "OpenAI API key not configured"}
+        
         response = await call_openai_api("Hello! Please respond with: 'OpenAI connection successful!'")
         return {
             "status": "success",
@@ -615,7 +667,7 @@ async def test_openai_connection():
 
 @app.get("/api/test-visual-generation")
 async def test_visual_generation():
-    """Test visual generation capability"""
+    """Test visual generation capability - Azure optimized"""
     try:
         # Test if Hugging Face Space is accessible
         try:
@@ -626,10 +678,13 @@ async def test_visual_generation():
             status = "fallback"
             message = f"Using local generation (HF Space error: {str(e)})"
         
-        # Test local generation
-        from PIL import Image
-        img = Image.new('RGB', (100, 100), color='red')
-        local_status = "available"
+        # Test local generation capability
+        try:
+            from PIL import Image
+            img = Image.new('RGB', (100, 100), color='red')
+            local_status = "available"
+        except Exception as e:
+            local_status = "error"
         
         return {
             "huggingface_space": {
@@ -639,9 +694,9 @@ async def test_visual_generation():
             },
             "local_generation": {
                 "status": local_status,
-                "message": "Local generation available as fallback"
+                "message": "Local generation available as fallback" if local_status == "available" else f"Local generation error: {e}"
             },
-            "recommendation": "Visual generation is ready to use"
+            "recommendation": "Visual generation is ready to use" if status == "connected" or local_status == "available" else "Visual generation may have issues"
         }
         
     except Exception as e:
@@ -652,67 +707,87 @@ async def test_visual_generation():
 
 @app.get("/api/test-connections")
 async def test_connections():
-    """Test all API connections"""
+    """Test all API connections - Azure optimized"""
     results = {
         "qloo": {"configured": bool(QLOO_API_KEY), "status": "unknown"},
         "openai": {"configured": bool(OPENAI_API_KEY), "status": "unknown"},
-        "visual_generation": {"configured": True, "status": "unknown"}
+        "visual_generation": {"configured": True, "status": "unknown"},
+        "environment": AZURE_ENV,
+        "port": PORT
     }
     
     # Test Qloo
     if QLOO_API_KEY:
         try:
             headers = {"X-Api-Key": QLOO_API_KEY}
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 url = f"{QLOO_API_URL}/v2/insights?filter.type=urn:demographics&signal.interests.tags=urn:tag:genre:lifestyle:general"
                 response = await client.get(url, headers=headers)
                 results["qloo"]["status"] = "connected" if response.status_code == 200 else "error"
-        except:
+                results["qloo"]["status_code"] = response.status_code
+        except Exception as e:
             results["qloo"]["status"] = "error"
+            results["qloo"]["error"] = str(e)
     
     # Test OpenAI
     if OPENAI_API_KEY:
         try:
             test_result = await test_openai_connection()
             results["openai"]["status"] = "connected" if test_result["status"] == "success" else "error"
-        except:
+            if test_result["status"] == "error":
+                results["openai"]["error"] = test_result["error"]
+        except Exception as e:
             results["openai"]["status"] = "error"
+            results["openai"]["error"] = str(e)
     
     # Test Visual Generation
     try:
         visual_test = await test_visual_generation()
-        results["visual_generation"]["status"] = "connected" if visual_test.get("huggingface_space", {}).get("status") == "connected" else "fallback"
-    except:
-        results["visual_generation"]["status"] = "fallback"
+        hf_status = visual_test.get("huggingface_space", {}).get("status", "error")
+        local_status = visual_test.get("local_generation", {}).get("status", "error")
+        
+        if hf_status == "connected":
+            results["visual_generation"]["status"] = "connected"
+        elif local_status == "available":
+            results["visual_generation"]["status"] = "fallback"
+        else:
+            results["visual_generation"]["status"] = "error"
+            
+        results["visual_generation"]["details"] = visual_test
+    except Exception as e:
+        results["visual_generation"]["status"] = "error"
+        results["visual_generation"]["error"] = str(e)
     
     return results
 
 @app.post("/api/generate-visual")
 async def generate_visual(request: VisualGenerationRequest):
-    """Generate marketing visual using Hugging Face Space"""
-    # [Your existing code remains exactly the same]
+    """Generate marketing visual using Hugging Face Space - Azure optimized"""
     try:
         logger.info(f"Generating visual for persona: {request.persona_name}")
         
-        # Try to use the Hugging Face Space first
+        # Try Hugging Face Space first with Azure-optimized timeouts
         try:
-            # Initialize Gradio client for your Space
-            logger.info(f"Attempting to use Hugging Face Space for visual generation")
+            logger.info("Attempting to use Hugging Face Space for visual generation")
             
             client = Client("Samkelo28/taste-target-visual-generator")
             
-            # Call the Space with your parameters
-            result = await asyncio.to_thread(
-                client.predict,
-                request.persona_name,
-                request.brand_values,
-                request.product_description,
-                request.style_preference,
-                request.image_type,
-                api_name="/predict"
+            # Azure-optimized call with proper timeout
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.predict,
+                    request.persona_name,
+                    request.brand_values,
+                    request.product_description,
+                    request.style_preference,
+                    request.image_type,
+                    True,  # use_ai parameter
+                    api_name="/predict"
+                ),
+                timeout=60.0  # Azure timeout
             )
             
-            # The result should be a file path to the generated image
+            # Process the result
             if result and isinstance(result, str) and os.path.exists(result):
                 # Read the image file and convert to base64
                 with open(result, "rb") as img_file:
@@ -730,244 +805,33 @@ async def generate_visual(request: VisualGenerationRequest):
                 return {
                     "status": "success",
                     "image_data": f"data:image/png;base64,{img_base64}",
-                    "message": "Visual generated successfully with AI"
+                    "message": "Visual generated successfully with AI",
+                    "generation_method": "huggingface_space"
+                }
+            elif hasattr(result, 'save'):
+                # PIL Image returned
+                from io import BytesIO
+                img_buffer = BytesIO()
+                result.save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                img_base64 = base64.b64encode(img_buffer.read()).decode('utf-8')
+                
+                return {
+                    "status": "success",
+                    "image_data": f"data:image/png;base64,{img_base64}",
+                    "message": "Visual generated successfully",
+                    "generation_method": "huggingface_space_pil"
                 }
             else:
-                raise Exception("Invalid result from Hugging Face Space")
+                raise Exception(f"Invalid result from Hugging Face Space: {type(result)}")
                 
+        except asyncio.TimeoutError:
+            logger.warning("Hugging Face Space timeout, falling back to local generation")
+            return await generate_local_visual_fallback(request)
         except Exception as hf_error:
             logger.warning(f"Hugging Face Space error: {str(hf_error)}")
             logger.info("Falling back to local generation")
-            
-            # [Rest of your existing fallback code remains the same]
-            # Fallback: Generate a stylized placeholder image locally
-            from PIL import Image, ImageDraw, ImageFont
-            import io
-            import math
-            
-            # Create a high-quality placeholder based on style
-            width, height = 512, 512
-            
-            # Style-specific colors and designs
-            style_configs = {
-                "minimalist clean": {
-                    "bg_color": (250, 250, 250),
-                    "accent_color": (0, 0, 0),
-                    "text_color": (0, 0, 0),
-                    "font_size": 24
-                },
-                "bold vibrant": {
-                    "bg_color": (255, 0, 128),
-                    "accent_color": (0, 255, 255),
-                    "text_color": (255, 255, 255),
-                    "font_size": 32
-                },
-                "luxury premium": {
-                    "bg_color": (20, 20, 20),
-                    "accent_color": (218, 165, 32),
-                    "text_color": (218, 165, 32),
-                    "font_size": 28
-                },
-                "natural organic": {
-                    "bg_color": (245, 245, 220),
-                    "accent_color": (34, 139, 34),
-                    "text_color": (34, 139, 34),
-                    "font_size": 26
-                },
-                "tech futuristic": {
-                    "bg_color": (10, 10, 50),
-                    "accent_color": (0, 255, 255),
-                    "text_color": (0, 255, 255),
-                    "font_size": 30
-                },
-                "artistic creative": {
-                    "bg_color": (255, 245, 238),
-                    "accent_color": (255, 69, 0),
-                    "text_color": (139, 69, 19),
-                    "font_size": 28
-                }
-            }
-            
-            config = style_configs.get(request.style_preference, style_configs["minimalist clean"])
-            
-            # Create image with anti-aliasing
-            img = Image.new('RGBA', (width, height), (*config["bg_color"], 255))
-            draw = ImageDraw.Draw(img)
-            
-            # Generate logo design based on type
-            if request.image_type == "logo":
-                # Extract brand initials
-                brand_name = request.product_description.strip()
-                initials = ''.join([word[0].upper() for word in brand_name.split()[:2]])
-                if not initials:
-                    initials = brand_name[:2].upper()
-                
-                # Create logo based on style
-                if request.style_preference == "minimalist clean":
-                    # Circular logo with initials
-                    draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=4)
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-                    except:
-                        font = ImageFont.load_default()
-                    bbox = draw.textbbox((0, 0), initials, font=font)
-                    text_width = bbox[2] - bbox[0]
-                    text_height = bbox[3] - bbox[1]
-                    draw.text((256 - text_width//2, 256 - text_height//2), initials, 
-                             fill=config["accent_color"], font=font)
-                    
-                elif request.style_preference == "bold vibrant":
-                    # Gradient-style square logo
-                    for i in range(100):
-                        alpha = int(255 * (1 - i/100))
-                        color = (*config["accent_color"], alpha)
-                        draw.rectangle([156+i, 156+i, 356-i, 356-i], outline=color, width=2)
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60)
-                    except:
-                        font = ImageFont.load_default()
-                    draw.text((256, 256), initials, fill=config["text_color"], font=font, anchor="mm")
-                    
-                elif request.style_preference == "luxury premium":
-                    # Diamond shape with gold accent
-                    points = [(256, 106), (406, 256), (256, 406), (106, 256)]
-                    draw.polygon(points, outline=config["accent_color"], width=3)
-                    # Inner diamond
-                    inner_points = [(256, 156), (356, 256), (256, 356), (156, 256)]
-                    draw.polygon(inner_points, outline=config["accent_color"], width=2)
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", 42)
-                    except:
-                        font = ImageFont.load_default()
-                    draw.text((256, 256), initials, fill=config["accent_color"], font=font, anchor="mm")
-                    
-                elif request.style_preference == "natural organic":
-                    # Leaf-inspired logo
-                    # Draw leaf shapes
-                    for angle in range(0, 360, 45):
-                        x = 256 + 80 * (angle % 90) / 90
-                        y = 256 - 80 * (angle % 90) / 90
-                        draw.arc([x-40, y-40, x+40, y+40], angle, angle+90, 
-                                fill=config["accent_color"], width=3)
-                    # Center circle
-                    draw.ellipse([226, 226, 286, 286], fill=config["bg_color"], outline=config["accent_color"], width=3)
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-                    except:
-                        font = ImageFont.load_default()
-                    draw.text((256, 256), initials, fill=config["accent_color"], font=font, anchor="mm")
-                    
-                elif request.style_preference == "tech futuristic":
-                    # Hexagon tech logo
-                    hex_points = []
-                    for i in range(6):
-                        angle = i * 60 * math.pi / 180
-                        x = 256 + 100 * math.cos(angle)
-                        y = 256 + 100 * math.sin(angle)
-                        hex_points.append((x, y))
-                    draw.polygon(hex_points, outline=config["accent_color"], width=3)
-                    # Inner hex
-                    inner_hex = []
-                    for i in range(6):
-                        angle = i * 60 * math.pi / 180
-                        x = 256 + 60 * math.cos(angle)
-                        y = 256 + 60 * math.sin(angle)
-                        inner_hex.append((x, y))
-                    draw.polygon(inner_hex, outline=config["accent_color"], width=2)
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-                    except:
-                        font = ImageFont.load_default()
-                    draw.text((256, 256), initials, fill=config["accent_color"], font=font, anchor="mm")
-                    
-                else:  # artistic creative
-                    # Abstract artistic logo
-                    import random
-                    random.seed(hash(brand_name))
-                    for _ in range(8):
-                        x1 = random.randint(156, 256)
-                        y1 = random.randint(156, 256)
-                        x2 = random.randint(256, 356)
-                        y2 = random.randint(256, 356)
-                        draw.arc([x1, y1, x2, y2], 0, 180, fill=config["accent_color"], width=3)
-                    try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 54)
-                    except:
-                        font = ImageFont.load_default()
-                    draw.text((256, 256), initials, fill=config["accent_color"], font=font, anchor="mm")
-                
-                # Add brand name below logo
-                try:
-                    small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-                except:
-                    small_font = ImageFont.load_default()
-                
-                draw.text((256, 420), brand_name, fill=config["text_color"], 
-                         font=small_font, anchor="mt")
-                
-            else:
-                # Marketing visual generation (existing code)
-                if request.style_preference == "minimalist clean":
-                    draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=3)
-                elif request.style_preference == "bold vibrant":
-                    draw.rectangle([100, 100, 300, 300], fill=config["accent_color"])
-                    draw.ellipse([212, 212, 412, 412], fill=config["bg_color"])
-                elif request.style_preference == "luxury premium":
-                    draw.rectangle([106, 206, 406, 306], fill=config["accent_color"])
-                elif request.style_preference == "natural organic":
-                    for i in range(5):
-                        x = 256 + i * 30 - 60
-                        y = 256 + i * 20 - 40
-                        draw.ellipse([x-50, y-20, x+50, y+20], fill=config["accent_color"])
-                elif request.style_preference == "tech futuristic":
-                    for i in range(0, width, 50):
-                        draw.line([(i, 0), (i, height)], fill=config["accent_color"], width=1)
-                        draw.line([(0, i), (width, i)], fill=config["accent_color"], width=1)
-                else:
-                    draw.arc([100, 100, 400, 400], 0, 270, fill=config["accent_color"], width=5)
-                
-                # Add text
-                try:
-                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", config["font_size"])
-                except:
-                    font = ImageFont.load_default()
-                
-                text = request.persona_name
-                bbox = draw.textbbox((0, 0), text, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_x = (width - text_width) // 2
-                draw.text((text_x, height - 80), text, fill=config["text_color"], font=font)
-                
-                product_text = request.product_description[:30] + "..." if len(request.product_description) > 30 else request.product_description
-                try:
-                    small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-                except:
-                    small_font = ImageFont.load_default()
-                
-                bbox = draw.textbbox((0, 0), product_text, font=small_font)
-                text_width = bbox[2] - bbox[0]
-                text_x = (width - text_width) // 2
-                draw.text((text_x, height - 50), product_text, fill=config["text_color"], font=small_font)
-            
-            # Add TasteTarget watermark for marketing visuals only
-            if request.image_type != "logo":
-                watermark = "TasteTarget AI"
-                bbox = draw.textbbox((0, 0), watermark, font=small_font)
-                draw.text((10, height - 20), watermark, fill=config["text_color"], font=small_font)
-            
-            # Convert to base64
-            img_buffer = io.BytesIO()
-            img.save(img_buffer, format='PNG', quality=95)
-            img_buffer.seek(0)
-            img_base64 = base64.b64encode(img_buffer.read()).decode('utf-8')
-            
-            message = "Logo generated successfully" if request.image_type == "logo" else "Visual generated successfully"
-            
-            return {
-                "status": "success",
-                "image_data": f"data:image/png;base64,{img_base64}",
-                "message": f"{message} (local generation)"
-            }
+            return await generate_local_visual_fallback(request)
                 
     except Exception as e:
         logger.error(f"Visual generation error: {str(e)}")
@@ -976,11 +840,178 @@ async def generate_visual(request: VisualGenerationRequest):
             "message": f"Failed to generate visual: {str(e)}"
         }
 
+async def generate_local_visual_fallback(request: VisualGenerationRequest):
+    """Azure-optimized local visual generation fallback"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+        import math
+        
+        # Create a high-quality placeholder based on style
+        width, height = 512, 512
+        
+        # Style-specific colors and designs
+        style_configs = {
+            "minimalist clean": {
+                "bg_color": (250, 250, 250),
+                "accent_color": (0, 0, 0),
+                "text_color": (0, 0, 0),
+                "font_size": 24
+            },
+            "bold vibrant": {
+                "bg_color": (255, 0, 128),
+                "accent_color": (0, 255, 255),
+                "text_color": (255, 255, 255),
+                "font_size": 32
+            },
+            "luxury premium": {
+                "bg_color": (20, 20, 20),
+                "accent_color": (218, 165, 32),
+                "text_color": (218, 165, 32),
+                "font_size": 28
+            },
+            "natural organic": {
+                "bg_color": (245, 245, 220),
+                "accent_color": (34, 139, 34),
+                "text_color": (34, 139, 34),
+                "font_size": 26
+            },
+            "tech futuristic": {
+                "bg_color": (10, 10, 50),
+                "accent_color": (0, 255, 255),
+                "text_color": (0, 255, 255),
+                "font_size": 30
+            },
+            "artistic creative": {
+                "bg_color": (255, 245, 238),
+                "accent_color": (255, 69, 0),
+                "text_color": (139, 69, 19),
+                "font_size": 28
+            }
+        }
+        
+        config = style_configs.get(request.style_preference, style_configs["minimalist clean"])
+        
+        # Create image
+        img = Image.new('RGB', (width, height), config["bg_color"])
+        draw = ImageDraw.Draw(img)
+        
+        # Try to load fonts with Azure-compatible paths
+        font_large = None
+        font_small = None
+        
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/System/Library/Fonts/Arial.ttf",  # macOS
+            "C:/Windows/Fonts/arial.ttf",  # Windows
+        ]
+        
+        for path in font_paths:
+            try:
+                font_large = ImageFont.truetype(path, 48)
+                font_small = ImageFont.truetype(path, 18)
+                break
+            except:
+                continue
+        
+        if not font_large:
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        
+        if request.image_type == "logo":
+            # Extract brand initials
+            brand_name = request.product_description.strip()
+            initials = ''.join([word[0].upper() for word in brand_name.split()[:2]])
+            if not initials:
+                initials = brand_name[:2].upper()
+            
+            # Create logo based on style
+            if request.style_preference == "minimalist clean":
+                draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=4)
+            elif request.style_preference == "tech futuristic":
+                # Hexagon tech logo
+                hex_points = []
+                for i in range(6):
+                    angle = i * 60 * math.pi / 180
+                    x = 256 + 80 * math.cos(angle)
+                    y = 256 + 80 * math.sin(angle)
+                    hex_points.append((x, y))
+                draw.polygon(hex_points, outline=config["accent_color"], width=3)
+            elif request.style_preference == "luxury premium":
+                # Diamond shape
+                points = [(256, 156), (356, 256), (256, 356), (156, 256)]
+                draw.polygon(points, outline=config["accent_color"], width=3)
+            else:
+                draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=3)
+            
+            # Draw initials
+            bbox = draw.textbbox((0, 0), initials, font=font_large)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            x = (width - text_width) // 2
+            y = (height - text_height) // 2
+            draw.text((x, y), initials, fill=config["accent_color"], font=font_large)
+            
+            # Add brand name
+            bbox = draw.textbbox((0, 0), brand_name, font=font_small)
+            text_width = bbox[2] - bbox[0]
+            x = (width - text_width) // 2
+            draw.text((x, 430), brand_name, fill=config["text_color"], font=font_small)
+            
+        else:  # marketing visual
+            # Marketing visual generation
+            if request.style_preference == "minimalist clean":
+                draw.ellipse([126, 126, 386, 386], outline=config["accent_color"], width=3)
+            elif request.style_preference == "bold vibrant":
+                for i in range(5):
+                    offset = i * 15
+                    draw.rectangle([126+offset, 126+offset, 386-offset, 386-offset], 
+                                 outline=config["accent_color"], width=2)
+            else:
+                draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=3)
+            
+            # Add text
+            bbox = draw.textbbox((0, 0), request.persona_name, font=font_large)
+            text_width = bbox[2] - bbox[0]
+            x = (width - text_width) // 2
+            draw.text((x, 400), request.persona_name, fill=config["text_color"], font=font_large)
+            
+            product_text = request.product_description[:30] + "..." if len(request.product_description) > 30 else request.product_description
+            bbox = draw.textbbox((0, 0), product_text, font=font_small)
+            text_width = bbox[2] - bbox[0]
+            x = (width - text_width) // 2
+            draw.text((x, 440), product_text, fill=config["text_color"], font=font_small)
+            
+            # Add watermark
+            watermark = "TasteTarget AI"
+            draw.text((10, height - 20), watermark, fill=config["text_color"], font=font_small)
+        
+        # Convert to base64
+        img_buffer = io.BytesIO()
+        img.save(img_buffer, format='PNG', quality=95)
+        img_buffer.seek(0)
+        img_base64 = base64.b64encode(img_buffer.read()).decode('utf-8')
+        
+        message = "Logo generated successfully" if request.image_type == "logo" else "Visual generated successfully"
+        
+        return {
+            "status": "success",
+            "image_data": f"data:image/png;base64,{img_base64}",
+            "message": f"{message} (local generation)",
+            "generation_method": "local_fallback"
+        }
+        
+    except Exception as e:
+        logger.error(f"Local fallback generation error: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to generate visual with fallback: {str(e)}"
+        }
 
-# ADD THIS NEW ENDPOINT AFTER THE EXISTING generate_visual ENDPOINT
 @app.post("/api/generate-cultural-visual")
 async def generate_cultural_visual(request: dict):
-    """Generate visuals that incorporate cultural insights from Qloo data"""
+    """Generate visuals that incorporate cultural insights - Azure optimized"""
     try:
         persona_data = request.get("persona_data", {})
         product_info = request.get("product_info", {})
@@ -993,10 +1024,10 @@ async def generate_cultural_visual(request: dict):
         psychographics = persona_data.get("psychographics", [])
         persona_name = persona_data.get("name", "Target Customer")
         
-        # Build a culturally-informed description
+        # Build culturally-informed description
         cultural_description = f"{product_info.get('name', 'product')}"
         
-        # Add cultural elements to the description for better AI generation
+        # Add cultural elements to the description
         cultural_context = []
         
         if custom_elements:
@@ -1025,8 +1056,6 @@ async def generate_cultural_visual(request: dict):
             cultural_description += " - " + ", ".join(cultural_context)
         
         logger.info(f"Generating culturally-informed visual for persona: {persona_name}")
-        logger.info(f"Cultural elements being incorporated: {cultural_interests}")
-        logger.info(f"Enhanced description: {cultural_description}")
         
         # Determine image type
         image_type = "logo" if visual_type == "logo" and not custom_elements else "marketing"
@@ -1040,7 +1069,7 @@ async def generate_cultural_visual(request: dict):
             image_type=image_type
         )
         
-        # Use the existing generate_visual function with enhanced description
+        # Use the existing generate_visual function
         result = await generate_visual(visual_request)
         
         # Add cultural metadata to the result
@@ -1048,23 +1077,15 @@ async def generate_cultural_visual(request: dict):
             result["cultural_elements"] = cultural_interests
             result["psychographics"] = psychographics
             result["generation_type"] = "cultural_enhanced"
-            result["prompt_summary"] = f"Created for {persona_name} with {len(psychographics)} key traits and {len(cultural_context)} cultural elements"
-            
-            # Log successful cultural generation
-            logger.info(f"Successfully generated cultural visual for {persona_name} with {len(cultural_context)} cultural elements")
+            result["prompt_summary"] = f"Created for {persona_name} with {len(psychographics)} traits and {len(cultural_context)} cultural elements"
         
         return result
         
     except Exception as e:
         logger.error(f"Cultural visual generation error: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
         
-        # Fallback to standard generation if cultural generation fails
+        # Fallback to standard generation
         try:
-            logger.info("Attempting fallback to standard visual generation")
-            
-            # Create a basic visual request
             basic_request = VisualGenerationRequest(
                 persona_name=request.get("persona_data", {}).get("name", "Customer"),
                 brand_values=request.get("product_info", {}).get("brand_values", "quality"),
@@ -1078,17 +1099,37 @@ async def generate_cultural_visual(request: dict):
             return result
             
         except Exception as fallback_error:
-            logger.error(f"Fallback generation also failed: {str(fallback_error)}")
+            logger.error(f"Fallback generation failed: {str(fallback_error)}")
             return {
                 "status": "error",
                 "message": f"Failed to generate visual: {str(e)}"
             }
 
+# Azure startup optimization
+@app.on_event("startup")
+async def startup_event():
+    """Azure startup event handler"""
+    logger.info("🚀 TasteTarget API startup complete")
+    logger.info(f"Running on Azure environment: {AZURE_ENV}")
+    logger.info(f"Port: {PORT}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Azure shutdown event handler"""
+    logger.info("🛑 TasteTarget API shutting down")
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("BACKEND_PORT", 8001))  
-    logger.info(f"Starting TasteTarget API on port {port}...")
-    logger.info(f"Qloo API: {'Connected' if QLOO_API_KEY else 'Not configured'}")
-    logger.info(f"OpenAI API: {'Connected' if OPENAI_API_KEY else 'Not configured'}")
-    logger.info("Visual Generation: Available via Hugging Face Space")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    logger.info(f"Starting TasteTarget API on port {PORT}...")
+    logger.info(f"Qloo API: {'✅ Connected' if QLOO_API_KEY else '❌ Not configured'}")
+    logger.info(f"OpenAI API: {'✅ Connected' if OPENAI_API_KEY else '❌ Not configured'}")
+    logger.info(f"Hugging Face API: {'✅ Connected' if HUGGINGFACE_API_KEY else '❌ Not configured'}")
+    logger.info("Visual Generation: Available via Hugging Face Space + Local Fallback")
+    
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=PORT,
+        log_level=LOG_LEVEL.lower(),
+        access_log=True
+    )
