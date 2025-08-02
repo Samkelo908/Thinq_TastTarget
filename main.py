@@ -15,72 +15,46 @@ from gradio_client import Client
 import time
 import math
 
-# Load environment variables (Azure will override these)
+# Load environment variables
 load_dotenv()
 
-# Azure-compatible API Configuration
+# API Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 QLOO_API_KEY = os.getenv("QLOO_API_KEY")
 QLOO_API_URL = os.getenv("QLOO_API_URL", "https://hackathon.api.qloo.com")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")  # Add this for Azure
-
-# Azure-specific configuration
-AZURE_ENV = os.getenv("ENVIRONMENT", "production")
-PORT = int(os.getenv("PORT", 8000))  # Azure uses PORT environment variable
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 # Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-APP_ENV = os.getenv("APP_ENV", "production")
+APP_ENV = os.getenv("APP_ENV", "development")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# Configure logging for Azure
+# Configure logging
 log_level = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
 logging.basicConfig(
     level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler()  # Azure captures stdout
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Log startup information
-logger.info("=" * 50)
-logger.info("🚀 TasteTarget API Starting...")
-logger.info("=" * 50)
-logger.info(f"Environment: {AZURE_ENV}")
-logger.info(f"Port: {PORT}")
-logger.info(f"OpenAI API: {'✅ Configured' if OPENAI_API_KEY else '❌ Missing'}")
-logger.info(f"Qloo API: {'✅ Configured' if QLOO_API_KEY else '❌ Missing'}")
-logger.info(f"Hugging Face API: {'✅ Configured' if HUGGINGFACE_API_KEY else '❌ Missing'}")
-logger.info("=" * 50)
 
 # Initialize FastAPI app
 app = FastAPI(
     title="TasteTarget API - Qloo + OpenAI",
     description="AI-Powered Cultural Targeting using Qloo's Taste AI and OpenAI GPT-4",
-    version="3.1.0",
-    docs_url="/docs" if AZURE_ENV != "production" else None,  # Disable docs in production
-    redoc_url="/redoc" if AZURE_ENV != "production" else None
+    version="3.0.0"
 )
 
-# Configure CORS for Azure
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://*.azurewebsites.net",
-        "https://*.azurestaticapps.net", 
-        "http://localhost:3000",
-        "http://localhost:8501",
-        "https://localhost:3000"
-    ] if AZURE_ENV == "production" else ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Request/Response Models (keep existing models)
+# Request/Response Models
 class ProductInput(BaseModel):
     product_name: str = Field(..., example="Eco-Friendly Vegan Sneakers")
     product_description: str = Field(..., example="Minimalist design, sustainable materials, zero waste production")
@@ -126,44 +100,33 @@ class HealthResponse(BaseModel):
     status: str
     timestamp: str
     version: str
-    environment: str
     qloo_connected: bool
     openai_connected: bool
-    huggingface_configured: bool
 
-# Azure-optimized OpenAI Integration
+# OpenAI Integration
 async def call_openai_api(prompt: str, temperature: float = 0.7, model: str = "gpt-4o-mini") -> str:
-    """Call OpenAI API for text generation with Azure compatibility"""
-    if not client:
-        raise HTTPException(status_code=500, detail="OpenAI API not configured")
-    
+    """Call OpenAI API for text generation"""
     try:
-        # Use the async approach with timeout for Azure
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.chat.completions.create,
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are a marketing expert specializing in cultural intelligence and audience targeting. Always respond with valid JSON when asked."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=temperature,
-                max_tokens=1000
-            ),
-            timeout=30.0  # Azure timeout handling
+        # Use the async approach with asyncio
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a marketing expert specializing in cultural intelligence and audience targeting. Always respond with valid JSON when asked."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=temperature,
+            max_tokens=1000
         )
         
         return response.choices[0].message.content
         
-    except asyncio.TimeoutError:
-        logger.error("OpenAI API timeout")
-        raise HTTPException(status_code=504, detail="OpenAI API timeout")
     except Exception as e:
         logger.error(f"OpenAI API error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
 def extract_json_from_response(response: str) -> dict:
-    """Extract JSON from OpenAI response - Azure optimized"""
+    """Extract JSON from OpenAI response"""
     try:
         # Clean response
         response = response.strip()
@@ -189,12 +152,12 @@ def extract_json_from_response(response: str) -> dict:
         
     except Exception as e:
         logger.warning(f"JSON parse error: {e}")
-        logger.debug(f"Response was: {response[:200]}...")  # Truncate for Azure logs
+        logger.debug(f"Response was: {response}")
         return {}
 
-# Azure-optimized Qloo API Integration
+# Qloo API Integration (same as before)
 async def call_qloo_api(product_info: dict) -> List[dict]:
-    """Call Qloo API v2 for taste-based insights - Azure optimized"""
+    """Call Qloo API v2 for taste-based insights"""
     if not QLOO_API_KEY:
         logger.warning("QLOO_API_KEY not found, using mock data")
         return await mock_qloo_api(product_info)
@@ -207,11 +170,7 @@ async def call_qloo_api(product_info: dict) -> List[dict]:
     clusters = []
     
     try:
-        # Azure-optimized HTTP client with proper timeouts
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
-        ) as http_client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             tag_mappings = {
                 "sustainability": ["urn:tag:genre:lifestyle:eco-friendly", "urn:tag:genre:lifestyle:sustainable"],
                 "innovation": ["urn:tag:genre:tech:innovative", "urn:tag:genre:lifestyle:modern"],
@@ -236,7 +195,7 @@ async def call_qloo_api(product_info: dict) -> List[dict]:
                     url = f"{base_url}?{query_string}"
                     
                     logger.info(f"Calling Qloo API: {url}")
-                    response = await http_client.get(url, headers=headers)
+                    response = await client.get(url, headers=headers)
                     
                     if response.status_code == 200:
                         insights = response.json()
@@ -347,7 +306,7 @@ def get_default_interests(category: str, cluster_name: str) -> List[str]:
 
 async def mock_qloo_api(product_info: dict) -> List[dict]:
     """Fallback mock data when Qloo API is unavailable"""
-    await asyncio.sleep(0.1)  # Reduced for Azure performance
+    await asyncio.sleep(0.5)
     
     clusters = []
     
@@ -389,11 +348,9 @@ async def mock_qloo_api(product_info: dict) -> List[dict]:
     
     return clusters[:3]
 
-# Keep all your existing persona and copy generation functions...
-# (I'll include the key ones that need Azure optimization)
-
+# Persona Generation with OpenAI
 async def generate_personas_with_openai(product_input: ProductInput, taste_clusters: List[dict]) -> List[TastePersona]:
-    """Generate personas using OpenAI GPT-4 - Azure optimized"""
+    """Generate personas using OpenAI GPT-4"""
     personas = []
     
     for i, cluster in enumerate(taste_clusters):
@@ -422,13 +379,18 @@ Generate a JSON object with exactly these fields:
 }}
 
 Based on the cultural interests, suggest REAL, CURRENT influencers who are active in 2024/2025. 
-Return ONLY the JSON object, no other text or markdown."""
+For musicians, include artists from the music genres mentioned in the interests.
+For lifestyle bloggers, include real Instagram/TikTok/YouTube creators who align with these interests.
+For thought leaders, include real industry experts, authors, or speakers relevant to the brand values.
+
+Important: Return ONLY the JSON object, no other text or markdown."""
 
         try:
             response = await call_openai_api(prompt, temperature=0.7)
             persona_data = extract_json_from_response(response)
             
             if persona_data and "persona_name" in persona_data:
+                # Extract specific influencers if provided, otherwise use empty dict
                 specific_influencers = persona_data.get('specific_influencers', {})
                 
                 personas.append(TastePersona(
@@ -472,7 +434,7 @@ def create_fallback_persona(cluster: dict, index: int) -> TastePersona:
     )
 
 async def generate_campaign_copy_with_openai(product_input: ProductInput, personas: List[TastePersona]) -> List[CampaignCopy]:
-    """Generate campaign copy using OpenAI - Azure optimized"""
+    """Generate campaign copy using OpenAI"""
     copies = []
     
     tone_guide = {
@@ -578,37 +540,29 @@ async def generate_suggestions(product_input: ProductInput, personas: List[Taste
     
     return suggestions
 
-# Azure-optimized API Endpoints
+# API Endpoints
 @app.get("/", response_model=HealthResponse)
-@app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Azure-compatible health check endpoint"""
+    """Health check endpoint"""
     # Test connections
     qloo_connected = bool(QLOO_API_KEY)
     openai_connected = bool(OPENAI_API_KEY)
-    huggingface_configured = bool(HUGGINGFACE_API_KEY)
     
     return HealthResponse(
         status="healthy",
         timestamp=datetime.utcnow().isoformat(),
-        version="3.1.0",
-        environment=AZURE_ENV,
+        version="3.0.0",
         qloo_connected=qloo_connected,
-        openai_connected=openai_connected,
-        huggingface_configured=huggingface_configured
+        openai_connected=openai_connected
     )
 
 @app.post("/api/generate-targeting", response_model=TasteTargetResponse)
 async def generate_targeting(product_input: ProductInput):
-    """Generate taste-based targeting using Qloo + OpenAI - Azure optimized"""
+    """Generate taste-based targeting using Qloo + OpenAI"""
     try:
         logger.info(f"Generating targeting for: {product_input.product_name}")
         logger.info(f"Using Qloo API: {bool(QLOO_API_KEY)}")
         logger.info(f"Using OpenAI API: {bool(OPENAI_API_KEY)}")
-        
-        # Validate required APIs
-        if not OPENAI_API_KEY:
-            raise HTTPException(status_code=503, detail="OpenAI API not configured")
         
         # Step 1: Get taste clusters from Qloo API
         taste_clusters = await call_qloo_api(product_input.dict())
@@ -640,8 +594,6 @@ async def generate_targeting(product_input: ProductInput):
         logger.info(f"Successfully generated targeting for: {product_input.product_name}")
         return response
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error in generate_targeting: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -650,9 +602,6 @@ async def generate_targeting(product_input: ProductInput):
 async def test_openai_connection():
     """Test OpenAI API connection"""
     try:
-        if not OPENAI_API_KEY:
-            return {"status": "error", "error": "OpenAI API key not configured"}
-        
         response = await call_openai_api("Hello! Please respond with: 'OpenAI connection successful!'")
         return {
             "status": "success",
@@ -667,7 +616,7 @@ async def test_openai_connection():
 
 @app.get("/api/test-visual-generation")
 async def test_visual_generation():
-    """Test visual generation capability - Azure optimized"""
+    """Test visual generation capability"""
     try:
         # Test if Hugging Face Space is accessible
         try:
@@ -678,13 +627,10 @@ async def test_visual_generation():
             status = "fallback"
             message = f"Using local generation (HF Space error: {str(e)})"
         
-        # Test local generation capability
-        try:
-            from PIL import Image
-            img = Image.new('RGB', (100, 100), color='red')
-            local_status = "available"
-        except Exception as e:
-            local_status = "error"
+        # Test local generation
+        from PIL import Image
+        img = Image.new('RGB', (100, 100), color='red')
+        local_status = "available"
         
         return {
             "huggingface_space": {
@@ -694,9 +640,9 @@ async def test_visual_generation():
             },
             "local_generation": {
                 "status": local_status,
-                "message": "Local generation available as fallback" if local_status == "available" else f"Local generation error: {e}"
+                "message": "Local generation available as fallback"
             },
-            "recommendation": "Visual generation is ready to use" if status == "connected" or local_status == "available" else "Visual generation may have issues"
+            "recommendation": "Visual generation is ready to use"
         }
         
     except Exception as e:
@@ -707,72 +653,221 @@ async def test_visual_generation():
 
 @app.get("/api/test-connections")
 async def test_connections():
-    """Test all API connections - Azure optimized"""
+    """Test all API connections"""
     results = {
         "qloo": {"configured": bool(QLOO_API_KEY), "status": "unknown"},
         "openai": {"configured": bool(OPENAI_API_KEY), "status": "unknown"},
-        "visual_generation": {"configured": True, "status": "unknown"},
-        "environment": AZURE_ENV,
-        "port": PORT
+        "visual_generation": {"configured": True, "status": "unknown"}
     }
     
     # Test Qloo
     if QLOO_API_KEY:
         try:
             headers = {"X-Api-Key": QLOO_API_KEY}
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 url = f"{QLOO_API_URL}/v2/insights?filter.type=urn:demographics&signal.interests.tags=urn:tag:genre:lifestyle:general"
                 response = await client.get(url, headers=headers)
                 results["qloo"]["status"] = "connected" if response.status_code == 200 else "error"
-                results["qloo"]["status_code"] = response.status_code
-        except Exception as e:
+        except:
             results["qloo"]["status"] = "error"
-            results["qloo"]["error"] = str(e)
     
     # Test OpenAI
     if OPENAI_API_KEY:
         try:
             test_result = await test_openai_connection()
             results["openai"]["status"] = "connected" if test_result["status"] == "success" else "error"
-            if test_result["status"] == "error":
-                results["openai"]["error"] = test_result["error"]
-        except Exception as e:
+        except:
             results["openai"]["status"] = "error"
-            results["openai"]["error"] = str(e)
     
     # Test Visual Generation
     try:
         visual_test = await test_visual_generation()
-        hf_status = visual_test.get("huggingface_space", {}).get("status", "error")
-        local_status = visual_test.get("local_generation", {}).get("status", "error")
-        
-        if hf_status == "connected":
-            results["visual_generation"]["status"] = "connected"
-        elif local_status == "available":
-            results["visual_generation"]["status"] = "fallback"
-        else:
-            results["visual_generation"]["status"] = "error"
-            
-        results["visual_generation"]["details"] = visual_test
-    except Exception as e:
-        results["visual_generation"]["status"] = "error"
-        results["visual_generation"]["error"] = str(e)
+        results["visual_generation"]["status"] = "connected" if visual_test.get("huggingface_space", {}).get("status") == "connected" else "fallback"
+    except:
+        results["visual_generation"]["status"] = "fallback"
     
     return results
 
+# Add this to the top of your main.py after the existing imports
+from huggingface_hub import InferenceClient
+
+# Update your API Configuration section
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+QLOO_API_KEY = os.getenv("QLOO_API_KEY")
+QLOO_API_URL = os.getenv("QLOO_API_URL", "https://hackathon.api.qloo.com")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")  # Add this line
+
+# Initialize clients
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize HF client if API key is available
+hf_inference_client = None
+if HUGGINGFACE_API_KEY:
+    try:
+        hf_inference_client = InferenceClient(token=HUGGINGFACE_API_KEY)
+        logger.info("✅ Hugging Face Inference Client initialized")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize HF Inference Client: {e}")
+        hf_inference_client = None
+else:
+    logger.warning("⚠️ HUGGINGFACE_API_KEY not found - Direct HF API unavailable")
+
+# Add this new function for direct HF API calls
+async def generate_with_direct_hf_api(request: VisualGenerationRequest):
+    """Generate image using direct Hugging Face API"""
+    if not hf_inference_client:
+        raise Exception("Hugging Face API client not available")
+    
+    try:
+        # Build prompt based on request
+        if request.image_type == "logo":
+            prompt = f"Professional logo design for {request.product_description}, {request.style_preference} style, clean vector design, minimalist, suitable for branding"
+        else:
+            prompt = f"Professional marketing poster for {request.product_description}, targeting {request.persona_name}, {request.style_preference} aesthetic, commercial quality design"
+        
+        # Try different models in order of preference
+        models_to_try = [
+            "black-forest-labs/FLUX.1-schnell",
+            "stabilityai/stable-diffusion-xl-base-1.0", 
+            "runwayml/stable-diffusion-v1-5"
+        ]
+        
+        for model in models_to_try:
+            try:
+                logger.info(f"Trying direct HF API with model: {model}")
+                
+                # Generate image
+                image = await asyncio.to_thread(
+                    hf_inference_client.text_to_image,
+                    prompt,
+                    model=model,
+                    width=512,
+                    height=512
+                )
+                
+                # Convert PIL image to base64
+                if hasattr(image, 'save'):
+                    from io import BytesIO
+                    img_buffer = BytesIO()
+                    image.save(img_buffer, format='PNG')
+                    img_buffer.seek(0)
+                    img_base64 = base64.b64encode(img_buffer.read()).decode('utf-8')
+                    
+                    logger.info(f"✅ Direct HF API success with {model}")
+                    return {
+                        "status": "success",
+                        "image_data": f"data:image/png;base64,{img_base64}",
+                        "message": f"Visual generated with Direct HF API ({model})",
+                        "generation_method": "huggingface_direct_api"
+                    }
+                    
+            except Exception as model_error:
+                logger.warning(f"❌ Model {model} failed: {str(model_error)}")
+                continue
+        
+        raise Exception("All HF API models failed")
+        
+    except Exception as e:
+        logger.error(f"Direct HF API error: {str(e)}")
+        raise e
+
+# Update your test endpoint
+@app.get("/api/test-visual-generation")
+async def test_visual_generation():
+    """Enhanced test visual generation capability"""
+    try:
+        results = {
+            "huggingface_space": {"status": "unknown", "message": "", "space_url": "https://huggingface.co/spaces/Samkelo28/taste-target-visual-generator"},
+            "huggingface_direct_api": {"status": "unknown", "message": "", "api_key_configured": bool(HUGGINGFACE_API_KEY)},
+            "local_generation": {"status": "unknown", "message": ""},
+            "recommendation": ""
+        }
+        
+        # Test 1: Hugging Face Space
+        try:
+            logger.info("🧪 Testing Hugging Face Space...")
+            client = Client("Samkelo28/taste-target-visual-generator")
+            results["huggingface_space"]["status"] = "connected"
+            results["huggingface_space"]["message"] = "Hugging Face Space is accessible"
+            logger.info("✅ HF Space test passed")
+        except Exception as e:
+            results["huggingface_space"]["status"] = "error"
+            results["huggingface_space"]["message"] = f"HF Space error: {str(e)}"
+            logger.warning(f"❌ HF Space test failed: {e}")
+        
+        # Test 2: Direct Hugging Face API
+        if HUGGINGFACE_API_KEY and hf_inference_client:
+            try:
+                logger.info("🧪 Testing Direct HF API...")
+                # Test with a simple prompt
+                test_image = await asyncio.to_thread(
+                    hf_inference_client.text_to_image,
+                    "simple test image, minimalist design",
+                    model="black-forest-labs/FLUX.1-schnell",
+                    width=64,  # Small test image
+                    height=64
+                )
+                if test_image:
+                    results["huggingface_direct_api"]["status"] = "connected"
+                    results["huggingface_direct_api"]["message"] = "Direct HF API working"
+                    logger.info("✅ Direct HF API test passed")
+                else:
+                    raise Exception("No image returned")
+            except Exception as e:
+                results["huggingface_direct_api"]["status"] = "error"
+                results["huggingface_direct_api"]["message"] = f"Direct API error: {str(e)}"
+                logger.warning(f"❌ Direct HF API test failed: {e}")
+        else:
+            results["huggingface_direct_api"]["status"] = "not_configured"
+            results["huggingface_direct_api"]["message"] = "API key not configured"
+        
+        # Test 3: Local generation
+        try:
+            logger.info("🧪 Testing Local PIL generation...")
+            from PIL import Image
+            img = Image.new('RGB', (100, 100), color='red')
+            results["local_generation"]["status"] = "available"
+            results["local_generation"]["message"] = "Local generation available as fallback"
+            logger.info("✅ Local generation test passed")
+        except Exception as e:
+            results["local_generation"]["status"] = "error"
+            results["local_generation"]["message"] = f"Local generation error: {str(e)}"
+            logger.warning(f"❌ Local generation test failed: {e}")
+        
+        # Determine recommendation
+        if results["huggingface_space"]["status"] == "connected":
+            results["recommendation"] = "✅ HF Space working - Optimal setup"
+        elif results["huggingface_direct_api"]["status"] == "connected":
+            results["recommendation"] = "✅ Direct HF API working - Good backup"
+        elif results["local_generation"]["status"] == "available":
+            results["recommendation"] = "⚠️ Only local generation available"
+        else:
+            results["recommendation"] = "❌ All generation methods failed"
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Test visual generation error: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "recommendation": "Test failed - check logs"
+        }
+
+# Update your main generate_visual endpoint with triple fallback
 @app.post("/api/generate-visual")
 async def generate_visual(request: VisualGenerationRequest):
-    """Generate marketing visual using Hugging Face Space - Azure optimized"""
+    """Generate marketing visual with triple fallback system"""
     try:
-        logger.info(f"Generating visual for persona: {request.persona_name}")
+        logger.info(f"🎨 Generating visual for persona: {request.persona_name}")
+        logger.info(f"📋 Request: {request.style_preference} {request.image_type}")
         
-        # Try Hugging Face Space first with Azure-optimized timeouts
+        # METHOD 1: Try Hugging Face Space first (your current working method)
         try:
-            logger.info("Attempting to use Hugging Face Space for visual generation")
+            logger.info("🚀 Method 1: Trying Hugging Face Space...")
             
             client = Client("Samkelo28/taste-target-visual-generator")
             
-            # Azure-optimized call with proper timeout
             result = await asyncio.wait_for(
                 asyncio.to_thread(
                     client.predict,
@@ -784,73 +879,74 @@ async def generate_visual(request: VisualGenerationRequest):
                     True,  # use_ai parameter
                     api_name="/predict"
                 ),
-                timeout=60.0  # Azure timeout
+                timeout=60.0  # 60 second timeout
             )
             
-            # Process the result
             if result and isinstance(result, str) and os.path.exists(result):
-                # Read the image file and convert to base64
                 with open(result, "rb") as img_file:
                     img_data = img_file.read()
                     img_base64 = base64.b64encode(img_data).decode('utf-8')
                 
-                # Clean up the temporary file
                 try:
                     os.remove(result)
                 except:
                     pass
                 
-                logger.info(f"Successfully generated visual for {request.persona_name}")
-                
+                logger.info("✅ SUCCESS: Hugging Face Space generation")
                 return {
                     "status": "success",
                     "image_data": f"data:image/png;base64,{img_base64}",
-                    "message": "Visual generated successfully with AI",
+                    "message": "Visual generated with Hugging Face Space",
                     "generation_method": "huggingface_space"
                 }
             elif hasattr(result, 'save'):
-                # PIL Image returned
+                # PIL Image returned directly
                 from io import BytesIO
                 img_buffer = BytesIO()
                 result.save(img_buffer, format='PNG')
                 img_buffer.seek(0)
                 img_base64 = base64.b64encode(img_buffer.read()).decode('utf-8')
                 
+                logger.info("✅ SUCCESS: Hugging Face Space (PIL result)")
                 return {
                     "status": "success",
                     "image_data": f"data:image/png;base64,{img_base64}",
-                    "message": "Visual generated successfully",
+                    "message": "Visual generated with Hugging Face Space",
                     "generation_method": "huggingface_space_pil"
                 }
             else:
-                raise Exception(f"Invalid result from Hugging Face Space: {type(result)}")
+                raise Exception(f"Invalid result from HF Space: {type(result)}")
                 
         except asyncio.TimeoutError:
-            logger.warning("Hugging Face Space timeout, falling back to local generation")
-            return await generate_local_visual_fallback(request)
-        except Exception as hf_error:
-            logger.warning(f"Hugging Face Space error: {str(hf_error)}")
-            logger.info("Falling back to local generation")
-            return await generate_local_visual_fallback(request)
+            logger.warning("⏰ HF Space timeout - trying direct API...")
+        except Exception as space_error:
+            logger.warning(f"❌ HF Space failed: {str(space_error)}")
+        
+        # METHOD 2: Try Direct Hugging Face API (if API key available)
+        if HUGGINGFACE_API_KEY and hf_inference_client:
+            try:
+                logger.info("🔄 Method 2: Trying Direct Hugging Face API...")
                 
-    except Exception as e:
-        logger.error(f"Visual generation error: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Failed to generate visual: {str(e)}"
-        }
-
-async def generate_local_visual_fallback(request: VisualGenerationRequest):
-    """Azure-optimized local visual generation fallback"""
-    try:
+                result = await generate_with_direct_hf_api(request)
+                if result and result.get("status") == "success":
+                    logger.info("✅ SUCCESS: Direct Hugging Face API")
+                    return result
+                    
+            except Exception as api_error:
+                logger.warning(f"❌ Direct HF API failed: {str(api_error)}")
+        else:
+            logger.info("⚠️ Direct HF API not available (no API key)")
+        
+        # METHOD 3: Local PIL Fallback (your existing code)
+        logger.info("🔄 Method 3: Using local PIL generation...")
+        
+        # [Keep all your existing PIL fallback code exactly as it is]
         from PIL import Image, ImageDraw, ImageFont
         import io
         import math
         
-        # Create a high-quality placeholder based on style
         width, height = 512, 512
         
-        # Style-specific colors and designs
         style_configs = {
             "minimalist clean": {
                 "bg_color": (250, 250, 250),
@@ -892,100 +988,66 @@ async def generate_local_visual_fallback(request: VisualGenerationRequest):
         
         config = style_configs.get(request.style_preference, style_configs["minimalist clean"])
         
-        # Create image
-        img = Image.new('RGB', (width, height), config["bg_color"])
+        img = Image.new('RGBA', (width, height), (*config["bg_color"], 255))
         draw = ImageDraw.Draw(img)
         
-        # Try to load fonts with Azure-compatible paths
-        font_large = None
-        font_small = None
-        
-        font_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/System/Library/Fonts/Arial.ttf",  # macOS
-            "C:/Windows/Fonts/arial.ttf",  # Windows
-        ]
-        
-        for path in font_paths:
-            try:
-                font_large = ImageFont.truetype(path, 48)
-                font_small = ImageFont.truetype(path, 18)
-                break
-            except:
-                continue
-        
-        if not font_large:
-            font_large = ImageFont.load_default()
-            font_small = ImageFont.load_default()
-        
         if request.image_type == "logo":
-            # Extract brand initials
             brand_name = request.product_description.strip()
             initials = ''.join([word[0].upper() for word in brand_name.split()[:2]])
             if not initials:
                 initials = brand_name[:2].upper()
             
-            # Create logo based on style
-            if request.style_preference == "minimalist clean":
-                draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=4)
-            elif request.style_preference == "tech futuristic":
-                # Hexagon tech logo
-                hex_points = []
-                for i in range(6):
-                    angle = i * 60 * math.pi / 180
-                    x = 256 + 80 * math.cos(angle)
-                    y = 256 + 80 * math.sin(angle)
-                    hex_points.append((x, y))
-                draw.polygon(hex_points, outline=config["accent_color"], width=3)
-            elif request.style_preference == "luxury premium":
-                # Diamond shape
-                points = [(256, 156), (356, 256), (256, 356), (156, 256)]
-                draw.polygon(points, outline=config["accent_color"], width=3)
-            else:
-                draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=3)
+            # Simple logo generation
+            draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=4)
             
-            # Draw initials
-            bbox = draw.textbbox((0, 0), initials, font=font_large)
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+            except:
+                font = ImageFont.load_default()
+            
+            bbox = draw.textbbox((0, 0), initials, font=font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
-            x = (width - text_width) // 2
-            y = (height - text_height) // 2
-            draw.text((x, y), initials, fill=config["accent_color"], font=font_large)
+            draw.text((256 - text_width//2, 256 - text_height//2), initials, 
+                     fill=config["accent_color"], font=font)
             
-            # Add brand name
-            bbox = draw.textbbox((0, 0), brand_name, font=font_small)
-            text_width = bbox[2] - bbox[0]
-            x = (width - text_width) // 2
-            draw.text((x, 430), brand_name, fill=config["text_color"], font=font_small)
+            try:
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+            except:
+                small_font = ImageFont.load_default()
             
-        else:  # marketing visual
+            draw.text((256, 420), brand_name, fill=config["text_color"], 
+                     font=small_font, anchor="mt")
+                     
+        else:
             # Marketing visual generation
-            if request.style_preference == "minimalist clean":
-                draw.ellipse([126, 126, 386, 386], outline=config["accent_color"], width=3)
-            elif request.style_preference == "bold vibrant":
-                for i in range(5):
-                    offset = i * 15
-                    draw.rectangle([126+offset, 126+offset, 386-offset, 386-offset], 
-                                 outline=config["accent_color"], width=2)
-            else:
-                draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=3)
+            draw.ellipse([156, 156, 356, 356], outline=config["accent_color"], width=3)
             
-            # Add text
-            bbox = draw.textbbox((0, 0), request.persona_name, font=font_large)
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", config["font_size"])
+            except:
+                font = ImageFont.load_default()
+            
+            text = request.persona_name
+            bbox = draw.textbbox((0, 0), text, font=font)
             text_width = bbox[2] - bbox[0]
-            x = (width - text_width) // 2
-            draw.text((x, 400), request.persona_name, fill=config["text_color"], font=font_large)
+            text_x = (width - text_width) // 2
+            draw.text((text_x, height - 80), text, fill=config["text_color"], font=font)
             
             product_text = request.product_description[:30] + "..." if len(request.product_description) > 30 else request.product_description
-            bbox = draw.textbbox((0, 0), product_text, font=font_small)
+            try:
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+            except:
+                small_font = ImageFont.load_default()
+            
+            bbox = draw.textbbox((0, 0), product_text, font=small_font)
             text_width = bbox[2] - bbox[0]
-            x = (width - text_width) // 2
-            draw.text((x, 440), product_text, fill=config["text_color"], font=font_small)
+            text_x = (width - text_width) // 2
+            draw.text((text_x, height - 50), product_text, fill=config["text_color"], font=small_font)
             
             # Add watermark
             watermark = "TasteTarget AI"
-            draw.text((10, height - 20), watermark, fill=config["text_color"], font=font_small)
+            draw.text((10, height - 20), watermark, fill=config["text_color"], font=small_font)
         
         # Convert to base64
         img_buffer = io.BytesIO()
@@ -995,23 +1057,40 @@ async def generate_local_visual_fallback(request: VisualGenerationRequest):
         
         message = "Logo generated successfully" if request.image_type == "logo" else "Visual generated successfully"
         
+        logger.info("✅ SUCCESS: Local PIL generation")
         return {
             "status": "success",
             "image_data": f"data:image/png;base64,{img_base64}",
             "message": f"{message} (local generation)",
             "generation_method": "local_fallback"
         }
-        
+                
     except Exception as e:
-        logger.error(f"Local fallback generation error: {str(e)}")
+        logger.error(f"❌ All generation methods failed: {str(e)}")
         return {
             "status": "error",
-            "message": f"Failed to generate visual with fallback: {str(e)}"
+            "message": f"Failed to generate visual: {str(e)}"
         }
 
+# Add environment test endpoint
+@app.get("/api/test-environment")
+async def test_environment():
+    """Test environment configuration"""
+    return {
+        "huggingface_api_key_configured": bool(HUGGINGFACE_API_KEY),
+        "huggingface_client_initialized": bool(hf_inference_client),
+        "openai_api_key_configured": bool(OPENAI_API_KEY),
+        "qloo_api_key_configured": bool(QLOO_API_KEY),
+        "environment": os.getenv("ENVIRONMENT", "unknown"),
+        "port": os.getenv("PORT", "unknown"),
+        "backend_port": os.getenv("BACKEND_PORT", "8001")
+    }
+
+
+# ADD THIS NEW ENDPOINT AFTER THE EXISTING generate_visual ENDPOINT
 @app.post("/api/generate-cultural-visual")
 async def generate_cultural_visual(request: dict):
-    """Generate visuals that incorporate cultural insights - Azure optimized"""
+    """Generate visuals that incorporate cultural insights from Qloo data"""
     try:
         persona_data = request.get("persona_data", {})
         product_info = request.get("product_info", {})
@@ -1024,10 +1103,10 @@ async def generate_cultural_visual(request: dict):
         psychographics = persona_data.get("psychographics", [])
         persona_name = persona_data.get("name", "Target Customer")
         
-        # Build culturally-informed description
+        # Build a culturally-informed description
         cultural_description = f"{product_info.get('name', 'product')}"
         
-        # Add cultural elements to the description
+        # Add cultural elements to the description for better AI generation
         cultural_context = []
         
         if custom_elements:
@@ -1056,6 +1135,8 @@ async def generate_cultural_visual(request: dict):
             cultural_description += " - " + ", ".join(cultural_context)
         
         logger.info(f"Generating culturally-informed visual for persona: {persona_name}")
+        logger.info(f"Cultural elements being incorporated: {cultural_interests}")
+        logger.info(f"Enhanced description: {cultural_description}")
         
         # Determine image type
         image_type = "logo" if visual_type == "logo" and not custom_elements else "marketing"
@@ -1069,7 +1150,7 @@ async def generate_cultural_visual(request: dict):
             image_type=image_type
         )
         
-        # Use the existing generate_visual function
+        # Use the existing generate_visual function with enhanced description
         result = await generate_visual(visual_request)
         
         # Add cultural metadata to the result
@@ -1077,15 +1158,23 @@ async def generate_cultural_visual(request: dict):
             result["cultural_elements"] = cultural_interests
             result["psychographics"] = psychographics
             result["generation_type"] = "cultural_enhanced"
-            result["prompt_summary"] = f"Created for {persona_name} with {len(psychographics)} traits and {len(cultural_context)} cultural elements"
+            result["prompt_summary"] = f"Created for {persona_name} with {len(psychographics)} key traits and {len(cultural_context)} cultural elements"
+            
+            # Log successful cultural generation
+            logger.info(f"Successfully generated cultural visual for {persona_name} with {len(cultural_context)} cultural elements")
         
         return result
         
     except Exception as e:
         logger.error(f"Cultural visual generation error: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         
-        # Fallback to standard generation
+        # Fallback to standard generation if cultural generation fails
         try:
+            logger.info("Attempting fallback to standard visual generation")
+            
+            # Create a basic visual request
             basic_request = VisualGenerationRequest(
                 persona_name=request.get("persona_data", {}).get("name", "Customer"),
                 brand_values=request.get("product_info", {}).get("brand_values", "quality"),
@@ -1099,37 +1188,18 @@ async def generate_cultural_visual(request: dict):
             return result
             
         except Exception as fallback_error:
-            logger.error(f"Fallback generation failed: {str(fallback_error)}")
+            logger.error(f"Fallback generation also failed: {str(fallback_error)}")
             return {
                 "status": "error",
                 "message": f"Failed to generate visual: {str(e)}"
             }
 
-# Azure startup optimization
-@app.on_event("startup")
-async def startup_event():
-    """Azure startup event handler"""
-    logger.info("🚀 TasteTarget API startup complete")
-    logger.info(f"Running on Azure environment: {AZURE_ENV}")
-    logger.info(f"Port: {PORT}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Azure shutdown event handler"""
-    logger.info("🛑 TasteTarget API shutting down")
-
 if __name__ == "__main__":
     import uvicorn
-    logger.info(f"Starting TasteTarget API on port {PORT}...")
-    logger.info(f"Qloo API: {'✅ Connected' if QLOO_API_KEY else '❌ Not configured'}")
-    logger.info(f"OpenAI API: {'✅ Connected' if OPENAI_API_KEY else '❌ Not configured'}")
-    logger.info(f"Hugging Face API: {'✅ Connected' if HUGGINGFACE_API_KEY else '❌ Not configured'}")
-    logger.info("Visual Generation: Available via Hugging Face Space + Local Fallback")
+    port = int(os.environ.get("BACKEND_PORT", 8001))  
+    logger.info(f"Starting TasteTarget API on port {port}...")
+    logger.info(f"Qloo API: {'Connected' if QLOO_API_KEY else 'Not configured'}")
+    logger.info(f"OpenAI API: {'Connected' if OPENAI_API_KEY else 'Not configured'}")
     
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=PORT,
-        log_level=LOG_LEVEL.lower(),
-        access_log=True
-    )
+    logger.info("Visual Generation: Available via Hugging Face Space")
+    uvicorn.run(app, host="0.0.0.0", port=port)
