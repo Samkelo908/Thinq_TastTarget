@@ -855,9 +855,13 @@ async def test_visual_generation():
         }
 
 # Update your main generate_visual endpoint with triple fallback
+
+
+# Replace your existing generate_visual function with this fixed version
+
 @app.post("/api/generate-visual")
 async def generate_visual(request: VisualGenerationRequest):
-    """Generate marketing visual with triple fallback system"""
+    """Generate marketing visual with triple fallback system and proper authentication"""
     try:
         logger.info(f"🎨 Generating visual for persona: {request.persona_name}")
         logger.info(f"📋 Request: {request.style_preference} {request.image_type}")
@@ -876,10 +880,10 @@ async def generate_visual(request: VisualGenerationRequest):
                     request.product_description,
                     request.style_preference,
                     request.image_type,
-                    True,  # use_ai parameter
+                    True,  # use_ai parameter - THIS WAS THE MISSING PARAMETER!
                     api_name="/predict"
                 ),
-                timeout=60.0  # 60 second timeout
+                timeout=60.0
             )
             
             if result and isinstance(result, str) and os.path.exists(result):
@@ -900,7 +904,6 @@ async def generate_visual(request: VisualGenerationRequest):
                     "generation_method": "huggingface_space"
                 }
             elif hasattr(result, 'save'):
-                # PIL Image returned directly
                 from io import BytesIO
                 img_buffer = BytesIO()
                 result.save(img_buffer, format='PNG')
@@ -922,28 +925,85 @@ async def generate_visual(request: VisualGenerationRequest):
         except Exception as space_error:
             logger.warning(f"❌ HF Space failed: {str(space_error)}")
         
-        # METHOD 2: Try Direct Hugging Face API (if API key available)
-        if HUGGINGFACE_API_KEY and hf_inference_client:
+        # METHOD 2: Try Direct Hugging Face API with PROPER AUTHENTICATION
+        if HUGGINGFACE_API_KEY:
             try:
                 logger.info("🔄 Method 2: Trying Direct Hugging Face API...")
                 
-                result = await generate_with_direct_hf_api(request)
-                if result and result.get("status") == "success":
-                    logger.info("✅ SUCCESS: Direct Hugging Face API")
-                    return result
-                    
+                # Build prompt based on request
+                if request.image_type == "logo":
+                    prompt = f"Professional logo design for {request.product_description}, {request.style_preference} style, clean vector design, minimalist, suitable for branding"
+                else:
+                    prompt = f"Professional marketing poster for {request.product_description}, targeting {request.persona_name}, {request.style_preference} aesthetic, commercial quality design"
+                
+                # FIXED: Use proper authentication headers for HF API
+                headers = {
+                    "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Try different models with proper API calls
+                models_to_try = [
+                    "black-forest-labs/FLUX.1-schnell",
+                    "stabilityai/stable-diffusion-xl-base-1.0", 
+                    "runwayml/stable-diffusion-v1-5"
+                ]
+                
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    for model in models_to_try:
+                        try:
+                            logger.info(f"Trying direct HF API with model: {model}")
+                            
+                            # Use the Inference API endpoint
+                            api_url = f"https://api-inference.huggingface.co/models/{model}"
+                            
+                            payload = {
+                                "inputs": prompt,
+                                "parameters": {
+                                    "width": 512,
+                                    "height": 512,
+                                    "num_inference_steps": 20
+                                }
+                            }
+                            
+                            response = await client.post(
+                                api_url,
+                                headers=headers,
+                                json=payload
+                            )
+                            
+                            if response.status_code == 200:
+                                # Response should be image bytes
+                                image_bytes = response.content
+                                img_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                                
+                                logger.info(f"✅ SUCCESS: Direct HF API with {model}")
+                                return {
+                                    "status": "success",
+                                    "image_data": f"data:image/png;base64,{img_base64}",
+                                    "message": f"Visual generated with Direct HF API ({model})",
+                                    "generation_method": "huggingface_direct_api"
+                                }
+                            else:
+                                logger.warning(f"❌ Model {model} failed: {response.status_code} - {response.text}")
+                                continue
+                                
+                        except Exception as model_error:
+                            logger.warning(f"❌ Model {model} failed: {str(model_error)}")
+                            continue
+                
+                logger.error("❌ All HF API models failed")
+                        
             except Exception as api_error:
                 logger.warning(f"❌ Direct HF API failed: {str(api_error)}")
         else:
             logger.info("⚠️ Direct HF API not available (no API key)")
         
-        # METHOD 3: Local PIL Fallback (your existing code)
+        # METHOD 3: Local PIL Fallback (your existing working code)
         logger.info("🔄 Method 3: Using local PIL generation...")
         
-        # [Keep all your existing PIL fallback code exactly as it is]
         from PIL import Image, ImageDraw, ImageFont
         import io
-        import math
         
         width, height = 512, 512
         
@@ -1072,19 +1132,78 @@ async def generate_visual(request: VisualGenerationRequest):
             "message": f"Failed to generate visual: {str(e)}"
         }
 
-# Add environment test endpoint
+# Update the test endpoint to properly test authentication
 @app.get("/api/test-environment")
 async def test_environment():
-    """Test environment configuration"""
+    """Test environment configuration with detailed HF auth check"""
+    hf_key_status = "not_configured"
+    hf_key_preview = "None"
+    
+    if HUGGINGFACE_API_KEY:
+        if len(HUGGINGFACE_API_KEY) > 8:
+            hf_key_preview = HUGGINGFACE_API_KEY[:8] + "..." + HUGGINGFACE_API_KEY[-4:]
+            hf_key_status = "configured"
+        else:
+            hf_key_preview = "Invalid (too short)"
+            hf_key_status = "invalid"
+    
     return {
         "huggingface_api_key_configured": bool(HUGGINGFACE_API_KEY),
-        "huggingface_client_initialized": bool(hf_inference_client),
+        "huggingface_key_status": hf_key_status,
+        "huggingface_key_preview": hf_key_preview,
         "openai_api_key_configured": bool(OPENAI_API_KEY),
         "qloo_api_key_configured": bool(QLOO_API_KEY),
         "environment": os.getenv("ENVIRONMENT", "unknown"),
         "port": os.getenv("PORT", "unknown"),
         "backend_port": os.getenv("BACKEND_PORT", "8001")
     }
+
+# Add a specific HF authentication test endpoint
+@app.get("/api/test-hf-auth")
+async def test_hf_authentication():
+    """Test Hugging Face API authentication specifically"""
+    if not HUGGINGFACE_API_KEY:
+        return {
+            "status": "error",
+            "message": "HUGGINGFACE_API_KEY not configured",
+            "configured": False
+        }
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {HUGGINGFACE_API_KEY}"
+        }
+        
+        # Test with a simple API call to check auth
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                "https://huggingface.co/api/whoami",
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                user_info = response.json()
+                return {
+                    "status": "success",
+                    "message": "HF API authentication successful",
+                    "configured": True,
+                    "user": user_info.get("name", "Unknown"),
+                    "key_preview": HUGGINGFACE_API_KEY[:8] + "..." + HUGGINGFACE_API_KEY[-4:]
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"HF API authentication failed: {response.status_code}",
+                    "configured": True,
+                    "response": response.text[:200]
+                }
+                
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"HF API test failed: {str(e)}",
+            "configured": True
+        }
 
 
 # ADD THIS NEW ENDPOINT AFTER THE EXISTING generate_visual ENDPOINT
